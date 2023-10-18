@@ -1,0 +1,227 @@
+name: 'NPM Build Test Job, Terraform Deploy Job'
+
+on:
+  workflow_call:
+    inputs:
+      runs_on_npm:
+        description: 'Your runner'
+        required: true
+        type: string
+      npm_path:
+        description: 'Working NPM Path'
+        required: true
+        type: string
+      runs_on_tf:
+        description: 'Your runner'
+        required: true
+        type: string
+      tf_path:
+        description: 'Working tf Path'
+        required: true
+        type: string
+      tf_workspace:
+        description: "Select your workspace"
+        required: true
+        type: string
+      deployment_role:
+        description: AWS deployment Credential
+        required: true
+        type: string
+      pipeline:
+        description: pipeline entry point
+        required: true
+        type: string
+
+
+jobs:
+  npm-build:
+    name: 'NPM JS Build Job'
+    defaults:
+      run:
+        working-directory: ${{inputs.npm_path}}
+    runs-on: ${{inputs.runs_on_npm}}
+
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v3
+        with:
+          # node-version: 14
+          cache: 'npm'
+
+      # Show Versions
+      - name: Show Node version
+        run: node --version
+
+      - name: Show NPM version
+        run: npm --version
+
+      # Install production only modules
+      - name: Install prod modules
+        run: npm ci --production
+
+      # Build
+      - name: Build
+        run: npm run build
+
+      # Package
+      - name: Package NPM output
+        run: npm run pack
+
+      - name: Archive production artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: dist-zip
+          path: |
+            dist.zip
+
+  npm-test:
+    name: 'NPM JS Test Job'
+    defaults:
+      run:
+        working-directory: ${{inputs.npm_path}}
+    runs-on: ${{inputs.runs_on_npm}}
+
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v3
+        with:
+          # node-version: 14
+          cache: 'npm'
+
+      # Show Versions
+      - name: Show Node version
+        run: node --version
+
+      - name: Show NPM version
+        run: npm --version
+
+      # Install all modules
+      - name: Install all modules
+        run: npm ci
+
+      # Lint
+      - name: Lint
+        run: npm run lint
+
+      # Test
+      - name: Run Unit Tests
+        run: npm run test
+
+    # - name: Archive test results artifacts
+    #   uses: actions/upload-artifact@v3
+    #   with:
+    #     name: dist-zip
+    #     path: |
+    #       ${{inputs.output_path}}
+
+  terraform:
+    name: 'Terraform'
+    needs: [npm-build, npm-test]
+    defaults:
+      run:
+        working-directory: ${{inputs.tf_path}}
+    runs-on: ${{inputs.runs_on_tf}}
+    # environment:  #Here is the name of your environment
+
+    # Permissions needed for OIDC token
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Download Dist Zip
+        uses: actions/download-artifact@v3
+        with:
+          name: dist-zip
+
+      # Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials from Test account
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: #removed
+          aws-region: us-west-2
+
+      ## get ghe image pipeline role
+      - name: Configure AWS credentials from Test account
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{inputs.deployment_role}}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ env.AWS_SESSION_TOKEN }}
+          role-duration-seconds: 3000
+          aws-region: us-west-2
+
+      # Will run linters and search for possible errors
+      - uses: actions/cache@v2
+        name: Cache plugin dir
+        with:
+          path: ~/.tflint.d/plugins
+          key: ${{ matrix.os }}-tflint-${{ hashFiles('.tflint.hcl') }}
+
+      # Setting up linters
+      - uses: terraform-linters/setup-tflint@v1
+        name: Setup TFLint
+        with:
+          tflint_version: v0.29.0
+
+      - name: Show version
+        run: tflint --version
+
+      - name: Init TFLint
+        run: tflint --init
+
+      - name: Run TFLint
+        run: tflint -f compact
+        continue-on-error: false
+
+      - name: set path to terraform cmd
+        run: echo "${HOME}/bin" >> $GITHUB_PATH
+
+      # Initialize working directory by creating initial files, loading any remote state, downloading modules, etc.
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Select TF workspace
+        run: terraform workspace select ${{inputs.tf_workspace}}
+
+      # Checks that all Terraform configuration files adhere to a canonical format and style
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt
+        continue-on-error: false
+
+      # Validates the configuration
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+        continue-on-error: false
+
+      # Evaluates and generates an execution plan for Terraform
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'pull_request'
+        run: terraform plan -no-color
+
+        # On push to master, build or change infrastructure according to Terraform configuration files
+      - name: Terraform Apply
+        id: apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve

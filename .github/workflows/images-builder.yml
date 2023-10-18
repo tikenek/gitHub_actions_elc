@@ -1,0 +1,82 @@
+name: 'Images builder workflow'
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: 'path(s) to Dockerfile, must be valid JSON list block.'
+        required: true
+        type: string
+      image-prefix:
+        description: 'prefix for image name eg sqa-ghe-image/'
+        required: false
+        type: string
+      runs-on:
+        description: 'Your runner'
+        required: true
+        type: string
+     
+
+jobs:
+  build:
+    # The type of runner that the job will run on
+    runs-on: ${{ inputs.runs-on }}
+    
+    #Matrix strategy
+    strategy:
+      matrix:
+        paths: ${{ fromJSON(inputs.paths) }}
+        exclude:
+        - paths: tf
+        
+    #Permissions needed for OIDC token
+    permissions:
+      id-token: write
+      contents: read
+
+    defaults:
+      run:
+        working-directory: ${{ matrix.paths }}
+        
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v3
+
+       # GitHub OIDC Auth / Assume role
+      - name: Configure AWS credentials from Test account
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: #removed
+          aws-region: us-west-2
+
+      ## Get ghe image pipeline role 
+      - name: Configure AWS credentials from Test account
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: #removed
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ env.AWS_SESSION_TOKEN }}
+          role-duration-seconds: 3000
+          aws-region: us-west-2
+
+        ## Login to ECR
+      - uses: #removed
+        id: ecr-login
+      
+      - name: Kaniko builder
+        # You may pin to the exact commit or the version.
+        # uses: aevea/action-kaniko@#removed
+        uses: aevea/action-kaniko@v0.9.0
+        with:
+          # Docker registry where the image will be pushed
+          registry: ${{ steps.ecr-login.outputs.registry }}
+          # Username used for authentication to the Docker registry
+          username: ${{ steps.ecr-login.outputs.docker_username here }}
+          # Password used for authentication to the Docker registry
+          password: ${{ steps.ecr-login.outputs.docker_password_here }}
+          # Image name
+          path: ${{ matrix.paths }}
+          image: ${{ inputs.image-prefix }}${{ matrix.paths }}
+          tag_with_latest	: true
+          skip_unchanged_digest: true

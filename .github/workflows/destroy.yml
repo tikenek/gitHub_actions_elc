@@ -1,0 +1,82 @@
+name: 'Terraform-destroy'
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: 'Run test'
+        required: true
+        type: string
+      runs-on:
+        description: 'Your runner'
+        required: true
+        type: string
+      tf_workspace: 
+        description: "Select your workspace"
+        required: true
+        type: string
+      deployment_role:
+        description: AWS deployment Credential
+        required: true 
+        type: string
+      pipeline:
+        description: pipeline entry point
+        required: true 
+        type: string
+
+jobs:
+  terraform:
+    name: 'Terraform'
+    defaults:
+      run:
+        working-directory: ${{inputs.path}}
+    runs-on:  ${{inputs.runs-on}}
+#    environment:  #Here is the name of your environment
+   
+    # Permissions needed for OIDC token
+    permissions:
+      id-token: write
+      contents: read  
+      
+    steps:
+    # Checkout the repository to the GitHub Actions runner
+    - name: Checkout
+      uses: actions/checkout@v2
+          
+    # Configure AWS credentials (OIDC)    
+    - name: Configure AWS credentials from Test account
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+          role-to-assume: #removed
+          aws-region: us-west-2
+
+
+      ## get ghe image pipeline role 
+      - name: Configure AWS credentials from Test account
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{inputs.deployment_role}}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ env.AWS_SESSION_TOKEN }}
+          role-duration-seconds: 3000
+          aws-region: us-west-2
+
+    - name: set path to terraform cmd
+      run: echo "${HOME}/bin" >> $GITHUB_PATH
+
+    # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
+    - name: Terraform Init
+      id: init
+      run: terraform init 
+      
+    - name: Select TF workspace
+      run: terraform workspace select ${{inputs.tf_workspace}}
+  
+    # Execute terraform destroy
+    - name: Terraform Destroy
+      id: destroy
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: terraform destroy 
+      
+      

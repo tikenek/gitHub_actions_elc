@@ -1,0 +1,96 @@
+name: 'Terraform reusable template'
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: 'Run test'
+        required: true
+        type: string
+      runs-on:
+        description: 'Your runner'
+        required: true
+        type: string
+
+jobs:
+  terraform:
+    name: 'Terraform'
+    defaults:
+      run:
+        working-directory: ${{inputs.path}}
+    runs-on:  ${{inputs.runs-on}}
+#    environment:  #Here is the name of your environment
+   
+        
+    steps:
+    # Checkout the repository 
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        submodules: true
+        
+    # Install nodejs
+    - uses: actions/setup-node@v2
+      with:
+          node-version: '14'  
+      
+    
+    # Will run linters and search for possible errors
+    - uses: actions/cache@v2
+      name: Cache plugin dir
+      with:
+        path: ~/.tflint.d/plugins
+        key: ${{ matrix.os }}-tflint-${{ hashFiles('.tflint.hcl') }}
+        
+    # Setting up linters
+    - uses: terraform-linters/setup-tflint@v1
+      name: Setup TFLint
+      with:
+        tflint_version: v0.29.0
+  
+    - name: Show version
+      run: tflint --version
+
+    - name: Init TFLint
+      run: tflint --init
+
+    - name: Run TFLint
+      run: tflint -f compact   
+      continue-on-error: true
+        
+    # Install Terraform CLI and configure the Terraform CLI configuration file
+    - name: Terraform Setup
+      uses: hashicorp/setup-terraform@v1
+    
+    # Checks that all Terraform configuration files adhere to a canonical format and style
+    - name: Terraform Format
+      id: fmt
+      run: terraform fmt 
+      continue-on-error: true
+    
+#     # Validates the configuration
+#     - name: Terraform Validate
+#       id: validate
+#       run: terraform validate -no-color 
+  
+#    # Evaluates and generates an execution plan for Terraform
+#    - name: Terraform Plan
+#      id: plan
+#      if: github.event_name == 'pull_request'
+#      run: terraform plan -no-color    
+
+     # Run Checkov 
+    - name: Set up Python 3.8
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.8.12'
+
+    - name: Run Checkov action
+      id: checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: ./
+        soft_fail: true  
+        framework: terraform
+
+    
